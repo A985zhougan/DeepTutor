@@ -38,6 +38,89 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 MIMIC_OUTPUT_DIR = PROJECT_ROOT / "data" / "user" / "question" / "mimic_papers"
 
 
+@router.get("/health")
+async def health_check():
+    """
+    Health check endpoint for question generation service.
+    
+    Returns:
+        dict: Service status and available endpoints
+    """
+    return {
+        "status": "healthy",
+        "service": "question_generation",
+        "endpoints": {
+            "custom_generation": "ws://localhost:8001/api/v1/question/generate",
+            "mimic_generation": "ws://localhost:8001/api/v1/question/mimic"
+        },
+        "description": {
+            "custom_generation": "Generate custom questions based on knowledge points, difficulty, and question type",
+            "mimic_generation": "Upload exam PDF and generate similar style questions"
+        }
+    }
+
+
+@router.get("/batches")
+async def list_question_batches(limit: int = 20):
+    """
+    List recent question generation batches.
+    
+    Args:
+        limit: Maximum number of batches to return (default: 20)
+        
+    Returns:
+        dict: List of question batches with metadata
+    """
+    try:
+        question_dir = PROJECT_ROOT / "data" / "user" / "question"
+        
+        if not question_dir.exists():
+            return {"batches": [], "total": 0}
+        
+        batches = []
+        
+        # Scan for custom mode batches
+        for batch_dir in sorted(question_dir.glob("custom_*"), reverse=True)[:limit]:
+            if batch_dir.is_dir():
+                # Count question files
+                question_files = list(batch_dir.glob("question_*_result.json"))
+                batches.append({
+                    "batch_id": batch_dir.name,
+                    "type": "custom",
+                    "timestamp": batch_dir.stat().st_mtime,
+                    "question_count": len(question_files),
+                    "path": str(batch_dir.relative_to(PROJECT_ROOT))
+                })
+        
+        # Scan for mimic mode batches
+        mimic_dir = question_dir / "mimic_papers"
+        if mimic_dir.exists():
+            for batch_dir in sorted(mimic_dir.glob("mimic_*"), reverse=True)[:limit]:
+                if batch_dir.is_dir():
+                    # Find generated questions file
+                    gen_files = list(batch_dir.glob("*_generated_questions.json"))
+                    batches.append({
+                        "batch_id": batch_dir.name,
+                        "type": "mimic",
+                        "timestamp": batch_dir.stat().st_mtime,
+                        "question_count": len(gen_files),
+                        "path": str(batch_dir.relative_to(PROJECT_ROOT))
+                    })
+        
+        # Sort by timestamp and limit
+        batches.sort(key=lambda x: x["timestamp"], reverse=True)
+        batches = batches[:limit]
+        
+        return {
+            "batches": batches,
+            "total": len(batches)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to list question batches: {e}")
+        return {"error": str(e), "batches": [], "total": 0}
+
+
 @router.websocket("/mimic")
 async def websocket_mimic_generate(websocket: WebSocket):
     """

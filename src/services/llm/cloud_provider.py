@@ -231,7 +231,8 @@ async def _openai_complete(
         if "response_format" in kwargs:
             data["response_format"] = kwargs["response_format"]
 
-        timeout = aiohttp.ClientTimeout(total=120)
+        # Increase timeout for complex requests (e.g., exam paper analysis with images)
+        timeout = aiohttp.ClientTimeout(total=300)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, headers=headers, json=data) as resp:
                 if resp.status == 200:
