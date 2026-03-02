@@ -305,6 +305,13 @@ class AgentCoordinator:
 
         if not retrieval_result.get("has_content"):
             self.logger.warning("No relevant knowledge found")
+            await self._send_ws_update(
+                "error",
+                {
+                    "content": "Knowledge base does not contain relevant information. Please create or select a knowledge base and add documents first.",
+                    "code": "knowledge_not_found",
+                },
+            )
             return {
                 "success": False,
                 "error": "knowledge_not_found",
