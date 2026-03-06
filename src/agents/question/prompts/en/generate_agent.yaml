@@ -21,8 +21,8 @@ generate: |
   Focus/Angle:
   {focus}
 
-  Background Knowledge:
-  {knowledge}
+  Reference Materials:
+  {context}
 
   Thinking instructions:
   - First, silently plan the scenario and reasoning steps to ensure the question is coherent.
@@ -49,8 +49,8 @@ generate_with_reference: |
   Requirements:
   {requirements}
 
-  Background Knowledge:
-  {knowledge}
+  Reference Materials:
+  {context}
 
   Requirements:
   1. **Maintain same core knowledge and difficulty**: Concepts being tested must stay aligned

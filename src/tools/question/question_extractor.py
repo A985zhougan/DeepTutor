@@ -81,10 +81,11 @@ def extract_questions_with_llm(
     content_list: list[dict] | None,
     images_dir: Path,
     api_key: str,
-    base_url: str,
+    base_url: str | None,
     model: str,
     api_version: str | None = None,
     binding: str | None = None,
+    max_questions: int | None = None,
 ) -> list[dict[str, Any]]:
     """
     Use LLM to analyze markdown content and extract questions
@@ -117,42 +118,45 @@ def extract_questions_with_llm(
             if img_file.suffix.lower() in [".jpg", ".jpeg", ".png", ".gif", ".webp"]:
                 image_list.append(img_file.name)
 
-    system_prompt = """You are a professional exam paper analysis assistant. Your task is to extract all question information from the provided exam paper content.
+    question_scope = "all questions"
+    if max_questions and max_questions > 0:
+        question_scope = f"only the first {max_questions} questions in paper order"
 
-Please carefully analyze the exam paper content and extract the following information for each question:
-1. Question number (e.g., "1.", "Question 1", etc.)
-2. Complete question text content (if multiple choice, include all options)
-3. Related image file names (if the question references images)
-
-For multiple choice questions, please merge the stem and all options into one complete question text, for example:
-"1. Which of the following descriptions about neural networks is correct? ()\nA. Option A content\nB. Option B content\nC. Option C content\nD. Option D content"
-
-Please return results in JSON format as follows:
-```json
-{
-    "questions": [
-        {
-            "question_number": "1",
-            "question_text": "Complete question content (including options)...",
-            "images": ["image_001.jpg", "image_002.jpg"]
-        },
-        {
-            "question_number": "2",
-            "question_text": "Complete content of another question...",
-            "images": []
-        }
-    ]
-}
-```
-
-Important Notes:
-1. Ensure all questions are extracted, do not miss any
-2. Keep the original question text, do not modify or summarize
-3. For multiple choice questions, must merge stem and options in question_text
-4. If a question has no associated images, set images field to empty array []
-5. Image file names should be actual existing file names
-6. Ensure the returned format is valid JSON
-"""
+    system_prompt = (
+        "You are a professional exam paper analysis assistant. "
+        "Your task is to extract {question_scope} from the provided exam paper content.\n\n"
+        "Please carefully analyze the exam paper content and extract the following information "
+        "for each selected question:\n"
+        "1. Question number (e.g., '1.', 'Question 1', etc.)\n"
+        "2. Complete question text content (if multiple choice, include all options)\n"
+        "3. Related image file names (if the question references images)\n\n"
+        "For multiple choice questions, please merge the stem and all options into one complete "
+        "question text.\n\n"
+        "Please return results in JSON format as follows:\n"
+        "```json\n"
+        "{{\n"
+        '    "questions": [\n'
+        "        {{\n"
+        '            "question_number": "1",\n'
+        '            "question_text": "Complete question content (including options)...",\n'
+        '            "images": ["image_001.jpg", "image_002.jpg"]\n'
+        "        }},\n"
+        "        {{\n"
+        '            "question_number": "2",\n'
+        '            "question_text": "Complete content of another question...",\n'
+        '            "images": []\n'
+        "        }}\n"
+        "    ]\n"
+        "}}\n"
+        "```\n\n"
+        "Important Notes:\n"
+        "1. Extract according to scope: {question_scope}\n"
+        "2. Keep the original question text, do not modify or summarize\n"
+        "3. For multiple choice questions, merge stem and options in question_text\n"
+        "4. If a question has no associated images, set images to []\n"
+        "5. Image file names should be actual existing file names\n"
+        "6. Ensure the returned format is valid JSON\n"
+    ).format(question_scope=question_scope)
 
     user_prompt = f"""Exam paper content (Markdown format):
 
@@ -161,7 +165,7 @@ Important Notes:
 Available image files:
 {json.dumps(image_list, ensure_ascii=False, indent=2)}
 
-Please analyze the above exam paper content, extract all question information, and return in JSON format.
+Please analyze the above exam paper content, extract question information according to the required scope, and return in JSON format.
 """
 
     print("\n🤖 Using LLM to analyze questions...")
@@ -177,6 +181,9 @@ Please analyze the above exam paper content, extract all question information, a
         "temperature": agent_params["temperature"],
         "max_tokens": agent_params["max_tokens"],
     }
+
+    if max_questions and max_questions > 0:
+        llm_kwargs["max_tokens"] = min(llm_kwargs["max_tokens"], 1500)
 
     # Only add response_format if the provider supports it
     if supports_response_format(binding, model):
@@ -257,6 +264,10 @@ Please analyze the above exam paper content, extract all question information, a
         ) from e
 
     questions = result.get("questions", [])
+
+    if max_questions and max_questions > 0:
+        questions = questions[:max_questions]
+
     print(f"✓ Successfully extracted {len(questions)} questions")
 
     return questions
@@ -300,7 +311,11 @@ def save_questions_json(questions: list[dict[str, Any]], output_dir: Path, paper
     return output_file
 
 
-def extract_questions_from_paper(paper_dir: str, output_dir: str | None = None) -> bool:
+def extract_questions_from_paper(
+    paper_dir: str | Path,
+    output_dir: str | Path | None = None,
+    max_questions: int | None = None,
+) -> bool:
     """
     Extract questions from parsed exam paper
 
@@ -311,14 +326,14 @@ def extract_questions_from_paper(paper_dir: str, output_dir: str | None = None) 
     Returns:
         Whether extraction was successful
     """
-    paper_dir = Path(paper_dir).resolve()
-    if not paper_dir.exists():
-        print(f"✗ Error: Directory does not exist: {paper_dir}")
+    paper_path = Path(paper_dir).resolve()
+    if not paper_path.exists():
+        print(f"✗ Error: Directory does not exist: {paper_path}")
         return False
 
-    print(f"📁 Paper directory: {paper_dir}")
+    print(f"📁 Paper directory: {paper_path}")
 
-    markdown_content, content_list, images_dir = load_parsed_paper(paper_dir)
+    markdown_content, content_list, images_dir = load_parsed_paper(paper_path)
 
     if not markdown_content:
         print("✗ Error: Unable to load paper content")
@@ -342,6 +357,7 @@ def extract_questions_from_paper(paper_dir: str, output_dir: str | None = None) 
         model=llm_config.model,
         api_version=getattr(llm_config, "api_version", None),
         binding=getattr(llm_config, "binding", None),
+        max_questions=max_questions,
     )
 
     if not questions:
@@ -349,12 +365,12 @@ def extract_questions_from_paper(paper_dir: str, output_dir: str | None = None) 
         return False
 
     if output_dir is None:
-        output_dir = paper_dir
+        output_path = paper_path
     else:
-        output_dir = Path(output_dir)
+        output_path = Path(output_dir)
 
-    paper_name = paper_dir.name
-    output_file = save_questions_json(questions, output_dir, paper_name)
+    paper_name = paper_path.name
+    output_file = save_questions_json(questions, output_path, paper_name)
 
     print("\n✓ Question extraction completed!")
     print(f"📄 View results: {output_file}")

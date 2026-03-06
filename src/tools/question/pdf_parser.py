@@ -12,41 +12,49 @@ import subprocess
 import sys
 
 
-def check_mineru_installed():
-    """Check if MinerU is installed"""
-    try:
-        # Security: Using partial path is intentional here - we need to find
-        # the command in user's PATH. These are trusted CLI tools, not user input.
-        result = subprocess.run(
-            ["magic-pdf", "--version"],  # nosec B607
-            check=False,
-            capture_output=True,
-            text=True,
-            shell=False,
-        )
-        if result.returncode == 0:
-            return "magic-pdf"
-    except FileNotFoundError:
-        pass
+def _candidate_mineru_commands() -> list[list[str]]:
+    """Build candidate MinerU commands in priority order."""
+    commands: list[list[str]] = [["magic-pdf"], ["mineru"]]
 
-    try:
-        # Security: Same as above - intentionally using PATH lookup for CLI tool.
-        result = subprocess.run(
-            ["mineru", "--version"],  # nosec B607
-            check=False,
-            capture_output=True,
-            text=True,
-            shell=False,
-        )
-        if result.returncode == 0:
-            return "mineru"
-    except FileNotFoundError:
-        pass
+    # Common case on Windows: executable is in venv Scripts but PATH not activated.
+    python_dir = Path(sys.executable).resolve().parent
+    local_bins = [
+        python_dir / "magic-pdf.exe",
+        python_dir / "magic-pdf",
+        python_dir / "mineru.exe",
+        python_dir / "mineru",
+    ]
+    for bin_path in local_bins:
+        if bin_path.exists():
+            commands.append([str(bin_path)])
+
+    # Fallback: module execution works even without CLI shim in PATH.
+    commands.append([sys.executable, "-m", "mineru"])
+    return commands
+
+
+def check_mineru_installed() -> list[str] | None:
+    """Check if MinerU is installed and return runnable command."""
+    for base_cmd in _candidate_mineru_commands():
+        try:
+            result = subprocess.run(
+                [*base_cmd, "--version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                shell=False,
+            )
+            if result.returncode == 0:
+                return base_cmd
+        except FileNotFoundError:
+            continue
+        except Exception:
+            continue
 
     return None
 
 
-def parse_pdf_with_mineru(pdf_path: str, output_base_dir: str = None):
+def parse_pdf_with_mineru(pdf_path: str, output_base_dir: str | Path | None = None):
     """
     Parse PDF file using MinerU
 
@@ -67,44 +75,44 @@ def parse_pdf_with_mineru(pdf_path: str, output_base_dir: str = None):
         print("or visit: https://github.com/opendatalab/MinerU")
         return False
 
-    print(f"✓ Detected MinerU command: {mineru_cmd}")
+    print(f"✓ Detected MinerU command: {' '.join(mineru_cmd)}")
 
-    pdf_path = Path(pdf_path).resolve()
-    if not pdf_path.exists():
-        print(f"✗ Error: PDF file does not exist: {pdf_path}")
+    pdf_file = Path(pdf_path).resolve()
+    if not pdf_file.exists():
+        print(f"✗ Error: PDF file does not exist: {pdf_file}")
         return False
 
-    if not pdf_path.suffix.lower() == ".pdf":
-        print(f"✗ Error: File is not PDF format: {pdf_path}")
+    if pdf_file.suffix.lower() != ".pdf":
+        print(f"✗ Error: File is not PDF format: {pdf_file}")
         return False
 
     # Project root is 3 levels up from src/tools/question/
     project_root = Path(__file__).parent.parent.parent.parent
     if output_base_dir is None:
-        output_base_dir = project_root / "reference_papers"
+        output_root = project_root / "reference_papers"
     else:
-        output_base_dir = Path(output_base_dir)
+        output_root = Path(output_base_dir)
 
-    output_base_dir.mkdir(parents=True, exist_ok=True)
+    output_root.mkdir(parents=True, exist_ok=True)
 
-    pdf_name = pdf_path.stem
-    output_dir = output_base_dir / pdf_name
+    pdf_name = pdf_file.stem
+    output_dir = output_root / pdf_name
 
     if output_dir.exists():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir = output_base_dir / f"{pdf_name}_backup_{timestamp}"
+        backup_dir = output_root / f"{pdf_name}_backup_{timestamp}"
         print(f"⚠️ Directory already exists, backing up to: {backup_dir.name}")
         shutil.move(str(output_dir), str(backup_dir))
 
-    print(f"📄 PDF file: {pdf_path}")
+    print(f"📄 PDF file: {pdf_file}")
     print(f"📁 Output directory: {output_dir}")
     print("→ Starting parsing...")
 
     try:
-        temp_output = output_base_dir / "temp_mineru_output"
+        temp_output = output_root / "temp_mineru_output"
         temp_output.mkdir(parents=True, exist_ok=True)
 
-        cmd = [mineru_cmd, "-p", str(pdf_path), "-o", str(temp_output)]
+        cmd = [*mineru_cmd, "-p", str(pdf_file), "-o", str(temp_output)]
 
         print(f"🔧 Executing command: {' '.join(cmd)}")
 

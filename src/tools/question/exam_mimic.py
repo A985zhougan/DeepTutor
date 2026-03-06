@@ -36,7 +36,7 @@ WsCallback = Callable[[str, dict[str, Any]], Any]
 
 
 async def generate_question_from_reference(
-    reference_question: dict[str, Any], coordinator: AgentCoordinator, kb_name: str
+    reference_question: dict[str, Any], coordinator: AgentCoordinator
 ) -> dict[str, Any]:
     """
     Generate a new question based on a reference entry.
@@ -45,7 +45,6 @@ async def generate_question_from_reference(
     requirement = {
         "reference_question": reference_question["question_text"],
         "has_images": len(reference_question.get("images", [])) > 0,
-        "kb_name": kb_name,
         "allow_reject": False,
         "additional_requirements": (
             f"Reference question:\n{reference_question['question_text']}\n\n"
@@ -74,7 +73,6 @@ async def generate_question_from_reference(
 async def mimic_exam_questions(
     pdf_path: str | None = None,
     paper_dir: str | None = None,
-    kb_name: str = None,
     output_dir: str | None = None,
     max_questions: int | None = None,
     ws_callback: WsCallback | None = None,
@@ -85,7 +83,6 @@ async def mimic_exam_questions(
     Args:
         pdf_path: Path to the PDF exam paper
         paper_dir: Path to a pre-parsed exam directory
-        kb_name: Knowledge base name to use
         output_dir: Output directory for generated questions
         max_questions: Maximum number of questions to process
         ws_callback: Optional async callback for WebSocket progress updates
@@ -276,7 +273,9 @@ async def mimic_exam_questions(
             questions_data = json.load(f)
     else:
         print("📄 No question file found, starting extraction...")
-        success = extract_questions_from_paper(paper_dir=str(latest_dir), output_dir=None)
+        success = extract_questions_from_paper(
+            paper_dir=str(latest_dir), output_dir=None, max_questions=max_questions
+        )
 
         if not success:
             await send_progress("error", {"content": "Question extraction failed"})
@@ -385,12 +384,11 @@ async def mimic_exam_questions(
                 base_url=llm_config.base_url,
                 api_version=getattr(llm_config, "api_version", None),
                 max_rounds=10,
-                kb_name=kb_name,
             )
 
             try:
                 result = await generate_question_from_reference(
-                    reference_question=ref_question, coordinator=coordinator, kb_name=kb_name
+                    reference_question=ref_question, coordinator=coordinator
                 )
 
                 async with completed_lock:
@@ -398,7 +396,10 @@ async def mimic_exam_questions(
                     current_completed = completed_count
 
                 if result.get("success"):
-                    print(f"✓ [{question_id}] Generated in {result['rounds']} round(s)")
+                    rounds = result.get("rounds", 1)
+                    validation = result.get("validation", {})
+
+                    print(f"✓ [{question_id}] Generated in {rounds} round(s)")
 
                     result_data = {
                         "success": True,
@@ -406,8 +407,8 @@ async def mimic_exam_questions(
                         "reference_question_text": ref_question["question_text"],
                         "reference_images": ref_question.get("images", []),
                         "generated_question": result["question"],
-                        "validation": result["validation"],
-                        "rounds": result["rounds"],
+                        "validation": validation,
+                        "rounds": rounds,
                     }
 
                     # Send result update
@@ -418,8 +419,8 @@ async def mimic_exam_questions(
                             "index": index,
                             "success": True,
                             "question": result["question"],
-                            "validation": result["validation"],
-                            "rounds": result["rounds"],
+                            "validation": validation,
+                            "rounds": rounds,
                             "reference_question": ref_question["question_text"],
                             "current": current_completed,
                             "total": len(reference_questions),
@@ -513,7 +514,6 @@ async def mimic_exam_questions(
 
     output_data = {
         "reference_paper": latest_dir.name,
-        "kb_name": kb_name,
         "total_reference_questions": len(reference_questions),
         "successful_generations": len(generated_questions),
         "failed_generations": len(failed_questions),
@@ -556,11 +556,11 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python exam_mimic.py --pdf /path/to/exam.pdf --kb math2211
-  python exam_mimic.py --paper 2211asm1 --kb math2211
-  python exam_mimic.py --paper reference_papers/2211asm1 --kb math2211
-  python exam_mimic.py --paper 2211asm1 --kb math2211 --max-questions 3
-  python exam_mimic.py --paper 2211asm1 --kb math2211 -o ./output
+  python exam_mimic.py --pdf /path/to/exam.pdf
+  python exam_mimic.py --paper 2211asm1
+  python exam_mimic.py --paper reference_papers/2211asm1
+  python exam_mimic.py --paper 2211asm1 --max-questions 3
+  python exam_mimic.py --paper 2211asm1 -o ./output
         """,
     )
 
@@ -575,8 +575,6 @@ Examples:
         type=str,
         help="Name of a parsed exam directory (e.g., 2211asm1) or its absolute path",
     )
-
-    parser.add_argument("--kb", type=str, required=True, help="Knowledge base name")
 
     parser.add_argument(
         "-o",
@@ -599,7 +597,6 @@ Examples:
     result = await mimic_exam_questions(
         pdf_path=args.pdf,
         paper_dir=args.paper,
-        kb_name=args.kb,
         output_dir=args.output,
         max_questions=args.max_questions,
     )

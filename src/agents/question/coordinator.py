@@ -3,10 +3,10 @@
 """
 AgentCoordinator - Orchestrates question generation workflow.
 
-Refactored version:
-- Uses specialized agents: RetrieveAgent, GenerateAgent, RelevanceAnalyzer
-- No iterative validation loops - single-pass generation + relevance analysis
-- All questions are accepted, classified as "high" or "partial" relevance
+Simplified version without knowledge base retrieval:
+- Uses specialized agents: RetrieveAgent (context processing), GenerateAgent
+- No knowledge base dependency
+- All questions are generated based on user input and optional context
 """
 
 from collections.abc import Callable
@@ -24,7 +24,6 @@ from src.logging import Logger, get_logger
 from src.services.config import load_config_with_main
 
 from .agents.generate_agent import GenerateAgent
-from .agents.relevance_analyzer import RelevanceAnalyzer
 from .agents.retrieve_agent import RetrieveAgent
 
 
@@ -33,10 +32,9 @@ class AgentCoordinator:
     Coordinate question generation workflow using specialized agents.
 
     Workflow:
-    1. RetrieveAgent: Generate queries and retrieve knowledge
+    1. RetrieveAgent: Process user-provided context
     2. Plan: Generate question plan with focuses
     3. GenerateAgent: Generate questions
-    4. RelevanceAnalyzer: Analyze relevance (no rejection, just classification)
     """
 
     def __init__(
@@ -44,8 +42,7 @@ class AgentCoordinator:
         api_key: str | None = None,
         base_url: str | None = None,
         api_version: str | None = None,
-        max_rounds: int = 10,  # Kept for backward compatibility, but not used for iteration
-        kb_name: str | None = None,
+        max_rounds: int = 10,  # Kept for backward compatibility, but not used
         output_dir: str | None = None,
         language: str = "en",
     ):
@@ -57,11 +54,9 @@ class AgentCoordinator:
             base_url: API endpoint (optional)
             api_version: API version for Azure (optional)
             max_rounds: Deprecated, kept for backward compatibility
-            kb_name: Knowledge base name
             output_dir: Output directory for results
             language: Language for prompts ("en" or "zh")
         """
-        self.kb_name = kb_name
         self.output_dir = output_dir
         self.language = language
 
@@ -81,9 +76,7 @@ class AgentCoordinator:
 
         # Get config values
         question_cfg = self.config.get("question", {})
-        self.rag_query_count = question_cfg.get("rag_query_count", 3)
         self.max_parallel_questions = question_cfg.get("max_parallel_questions", 1)
-        self.rag_mode = question_cfg.get("rag_mode", "naive")
 
         # Token tracking - will be updated from BaseAgent shared stats
         self.token_stats = {
@@ -132,8 +125,6 @@ class AgentCoordinator:
     def _create_retrieve_agent(self) -> RetrieveAgent:
         """Create a RetrieveAgent instance."""
         return RetrieveAgent(
-            kb_name=self.kb_name,
-            rag_mode=self.rag_mode,
             language=self.language,
             api_key=self._api_key,
             base_url=self._base_url,
@@ -149,15 +140,6 @@ class AgentCoordinator:
             api_version=self._api_version,
         )
 
-    def _create_relevance_analyzer(self) -> RelevanceAnalyzer:
-        """Create a RelevanceAnalyzer instance."""
-        return RelevanceAnalyzer(
-            language=self.language,
-            api_key=self._api_key,
-            base_url=self._base_url,
-            api_version=self._api_version,
-        )
-
     # =========================================================================
     # Main Entry Points
     # =========================================================================
@@ -167,7 +149,7 @@ class AgentCoordinator:
         requirement: dict[str, Any],
     ) -> dict[str, Any]:
         """
-        Generate a single question with relevance analysis.
+        Generate a single question.
 
         This is used by Mimic mode and for single question generation.
 
@@ -178,7 +160,6 @@ class AgentCoordinator:
             Dict with:
                 - success: bool
                 - question: Generated question dict
-                - analysis: Relevance analysis result
                 - rounds: Always 1 (no iteration)
         """
         self.logger.section("Single Question Generation")
@@ -188,22 +169,14 @@ class AgentCoordinator:
             "progress", {"stage": "generating", "progress": {"status": "initializing"}}
         )
 
-        # Step 1: Retrieve knowledge
+        # Step 1: Process context
         retrieve_agent = self._create_retrieve_agent()
-        retrieval_result = await retrieve_agent.process(
+        context_result = await retrieve_agent.process(
             requirement=requirement,
-            num_queries=self.rag_query_count,
+            context=requirement.get("context"),
         )
 
-        if not retrieval_result.get("has_content"):
-            self.logger.warning("No relevant knowledge found")
-            return {
-                "success": False,
-                "error": "knowledge_not_found",
-                "message": "Knowledge base does not contain relevant information.",
-            }
-
-        knowledge_context = retrieval_result["summary"]
+        context = context_result["summary"]
 
         # Step 2: Generate question
         generate_agent = self._create_generate_agent()
@@ -213,7 +186,7 @@ class AgentCoordinator:
 
         gen_result = await generate_agent.process(
             requirement=requirement,
-            knowledge_context=knowledge_context,
+            context=context,
             reference_question=reference_question,
         )
 
@@ -226,25 +199,12 @@ class AgentCoordinator:
 
         question = gen_result["question"]
 
-        # Step 3: Analyze relevance
-        analyzer = self._create_relevance_analyzer()
-        analysis = await analyzer.process(
-            question=question,
-            knowledge_context=knowledge_context,
-        )
+        self.logger.success("Question generated successfully")
 
-        self.logger.success(f"Question generated with {analysis['relevance']} relevance")
-
-        # Build result (compatible with old format)
+        # Build result
         result = {
             "success": True,
             "question": question,
-            "validation": {
-                "decision": "approve",  # Always approve
-                "relevance": analysis["relevance"],
-                "kb_coverage": analysis["kb_coverage"],
-                "extension_points": analysis.get("extension_points", ""),
-            },
             "rounds": 1,  # No iteration
         }
 
@@ -266,12 +226,12 @@ class AgentCoordinator:
         Custom mode: Generate multiple questions from a requirement.
 
         Flow:
-        1. Researching: Retrieve background knowledge
+        1. Processing: Process user-provided context
         2. Planning: Generate question plan with focuses
-        3. Generating: Generate each question + relevance analysis
+        3. Generating: Generate each question
 
         Args:
-            requirement: Base requirement dict (knowledge_point, difficulty, question_type)
+            requirement: Base requirement dict (knowledge_point, difficulty, question_type, context)
             num_questions: Number of questions to generate
 
         Returns:
@@ -289,37 +249,21 @@ class AgentCoordinator:
             batch_dir.mkdir(parents=True, exist_ok=True)
 
         # =====================================================================
-        # Stage 1: Researching
+        # Stage 1: Processing Context
         # =====================================================================
-        self.logger.stage("Stage 1: Researching")
+        self.logger.stage("Stage 1: Processing Context")
         await self._send_ws_update(
             "progress",
-            {"stage": "researching", "progress": {"status": "retrieving"}, "total": num_questions},
+            {"stage": "processing", "progress": {"status": "processing"}, "total": num_questions},
         )
 
         retrieve_agent = self._create_retrieve_agent()
-        retrieval_result = await retrieve_agent.process(
+        context_result = await retrieve_agent.process(
             requirement=requirement,
-            num_queries=self.rag_query_count,
+            context=requirement.get("context"),
         )
 
-        if not retrieval_result.get("has_content"):
-            self.logger.warning("No relevant knowledge found")
-            return {
-                "success": False,
-                "error": "knowledge_not_found",
-                "message": "Knowledge base does not contain relevant information.",
-                "search_queries": retrieval_result.get("queries", []),
-            }
-
-        knowledge_context = retrieval_result["summary"]
-        queries = retrieval_result["queries"]
-
-        # Save knowledge.json
-        if batch_dir:
-            self._save_knowledge_json(batch_dir, retrieval_result)
-
-        await self._send_ws_update("knowledge_saved", {"queries": queries})
+        context = context_result["summary"]
 
         # =====================================================================
         # Stage 2: Planning
@@ -329,7 +273,7 @@ class AgentCoordinator:
             "progress", {"stage": "planning", "progress": {"status": "creating_plan"}}
         )
 
-        plan = await self._generate_question_plan(requirement, knowledge_context, num_questions)
+        plan = await self._generate_question_plan(requirement, context, num_questions)
         focuses = plan.get("focuses", [])
 
         # Save plan.json
@@ -351,7 +295,6 @@ class AgentCoordinator:
         failures = []
 
         generate_agent = self._create_generate_agent()
-        analyzer = self._create_relevance_analyzer()
 
         for idx, focus in enumerate(focuses):
             question_id = focus.get("id", f"q_{idx + 1}")
@@ -369,7 +312,7 @@ class AgentCoordinator:
             # Generate question
             gen_result = await generate_agent.process(
                 requirement=requirement,
-                knowledge_context=knowledge_context,
+                context=context,
                 focus=focus,
             )
 
@@ -388,22 +331,9 @@ class AgentCoordinator:
 
             question = gen_result["question"]
 
-            # Analyze relevance
-            await self._send_ws_update(
-                "question_update", {"question_id": question_id, "status": "analyzing"}
-            )
-
-            analysis = await analyzer.process(
-                question=question,
-                knowledge_context=knowledge_context,
-            )
-
-            # Build validation dict (compatible with frontend)
+            # Build validation dict (for frontend compatibility)
             validation = {
                 "decision": "approve",
-                "relevance": analysis["relevance"],
-                "kb_coverage": analysis["kb_coverage"],
-                "extension_points": analysis.get("extension_points", ""),
             }
 
             # Save result
@@ -411,7 +341,6 @@ class AgentCoordinator:
                 "question_id": question_id,
                 "focus": focus,
                 "question": question,
-                "analysis": analysis,
                 "validation": validation,  # For frontend compatibility
             }
 
@@ -446,7 +375,6 @@ class AgentCoordinator:
             "requested": num_questions,
             "completed": len(results),
             "failed": len(failures),
-            "search_queries": queries,
             "plan": plan,
             "results": results,
             "failures": failures,
@@ -485,7 +413,7 @@ class AgentCoordinator:
     async def _generate_question_plan(
         self,
         requirement: dict[str, Any],
-        knowledge_context: str,
+        context: str,
         num_questions: int,
     ) -> dict[str, Any]:
         """
@@ -493,7 +421,7 @@ class AgentCoordinator:
 
         Args:
             requirement: Base requirement
-            knowledge_context: Retrieved knowledge summary
+            context: User-provided context or default message
             num_questions: Number of questions
 
         Returns:
@@ -514,18 +442,16 @@ class AgentCoordinator:
             f'- "type": "{requirement.get("question_type", "written")}"'
         )
 
-        # Truncate knowledge context consistently (4000 chars across all agents)
-        truncated_knowledge = (
-            knowledge_context[:4000] if len(knowledge_context) > 4000 else knowledge_context
-        )
-        truncation_suffix = "...[truncated]" if len(knowledge_context) > 4000 else ""
+        # Truncate context consistently (4000 chars)
+        truncated_context = context[:4000] if len(context) > 4000 else context
+        truncation_suffix = "...[truncated]" if len(context) > 4000 else ""
 
         user_prompt = (
             f"Topic: {requirement.get('knowledge_point', '')}\n"
             f"Difficulty: {requirement.get('difficulty', 'medium')}\n"
             f"Question Type: {requirement.get('question_type', 'written')}\n"
             f"Number: {num_questions}\n\n"
-            f"Knowledge:\n{truncated_knowledge}{truncation_suffix}\n\n"
+            f"Context:\n{truncated_context}{truncation_suffix}\n\n"
             f"Generate exactly {num_questions} distinct focuses in JSON."
         )
 
@@ -590,14 +516,12 @@ class AgentCoordinator:
 
             # Save question.md
             question = result.get("question", {})
-            validation = result.get("validation", {})
 
             md_content = f"""# Generated Question
 
 **Knowledge point**: {requirement.get("knowledge_point", question.get("knowledge_point", "N/A"))}
 **Difficulty**: {requirement.get("difficulty", "N/A")}
 **Type**: {question.get("question_type", "N/A")}
-**Relevance**: {validation.get("relevance", "N/A")}
 
 ---
 
@@ -617,15 +541,7 @@ class AgentCoordinator:
 
 ## Explanation
 {question.get("explanation", "")}
-
----
-
-## Relevance Analysis
-
-**KB Coverage**: {validation.get("kb_coverage", "")}
 """
-            if validation.get("extension_points"):
-                md_content += f"\n**Extension Points**: {validation.get('extension_points', '')}"
 
             with open(output_path / "question.md", "w", encoding="utf-8") as f:
                 f.write(md_content)
@@ -636,24 +552,6 @@ class AgentCoordinator:
         except Exception as e:
             self.logger.warning(f"Failed to save result: {e}")
             return None
-
-    def _save_knowledge_json(
-        self,
-        batch_dir: Path,
-        retrieval_result: dict[str, Any],
-    ):
-        """Save knowledge.json for a batch."""
-        knowledge_file = batch_dir / "knowledge.json"
-        with open(knowledge_file, "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "queries": retrieval_result.get("queries", []),
-                    "retrievals": retrieval_result.get("retrievals", []),
-                },
-                f,
-                indent=2,
-                ensure_ascii=False,
-            )
 
     def _save_plan_json(self, batch_dir: Path, plan: dict[str, Any]):
         """Save plan.json for a batch."""
@@ -677,14 +575,12 @@ class AgentCoordinator:
 
         # Save question.md
         question = result.get("question", {})
-        analysis = result.get("analysis", {})
         focus = result.get("focus", {})
 
         md_content = f"""# Generated Question
 
 **Focus**: {focus.get("focus", "N/A")}
 **Type**: {question.get("question_type", "N/A")}
-**Relevance**: {analysis.get("relevance", "N/A")}
 
 ---
 
@@ -704,15 +600,7 @@ class AgentCoordinator:
 
 ## Explanation
 {question.get("explanation", "")}
-
----
-
-## Relevance Analysis
-
-**KB Coverage**: {analysis.get("kb_coverage", "")}
 """
-        if analysis.get("extension_points"):
-            md_content += f"\n**Extension Points**: {analysis.get('extension_points', '')}"
 
         with open(question_dir / "question.md", "w", encoding="utf-8") as f:
             f.write(md_content)

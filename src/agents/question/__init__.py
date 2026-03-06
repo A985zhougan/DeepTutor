@@ -2,9 +2,8 @@
 Question Generation System
 
 Modular question generation using specialized agents:
-- RetrieveAgent: Knowledge base retrieval
+- RetrieveAgent: Context processing
 - GenerateAgent: Question generation
-- RelevanceAnalyzer: Question-KB relevance analysis
 - AgentCoordinator: Workflow orchestration
 
 Tools (moved to src/tools/question):
@@ -13,12 +12,11 @@ Tools (moved to src/tools/question):
 - mimic_exam_questions
 """
 
-from .agents import GenerateAgent, RelevanceAnalyzer, RetrieveAgent
+from .agents import GenerateAgent, RetrieveAgent
 from .coordinator import AgentCoordinator
 
 __all__ = [
     "RetrieveAgent",
     "GenerateAgent",
-    "RelevanceAnalyzer",
     "AgentCoordinator",
 ]

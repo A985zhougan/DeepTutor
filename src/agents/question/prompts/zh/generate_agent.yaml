@@ -21,8 +21,8 @@ generate: |
   焦点/角度：
   {focus}
 
-  背景知识：
-  {knowledge}
+  参考材料：
+  {context}
 
   思考说明：
   - 首先，默默地规划场景和推理步骤，确保题目连贯。
@@ -49,8 +49,8 @@ generate_with_reference: |
   要求：
   {requirements}
 
-  背景知识：
-  {knowledge}
+  参考材料：
+  {context}
 
   要求：
   1. **保持相同的核心知识和难度**：测试的概念必须保持一致

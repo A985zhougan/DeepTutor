@@ -52,7 +52,6 @@ async def websocket_mimic_generate(websocket: WebSocket):
         "mode": "upload",
         "pdf_data": "base64_encoded_pdf_content",
         "pdf_name": "exam.pdf",
-        "kb_name": "knowledge_base_name",
         "max_questions": 5  // optional
     }
 
@@ -60,7 +59,6 @@ async def websocket_mimic_generate(websocket: WebSocket):
     {
         "mode": "parsed",
         "paper_path": "directory_name",
-        "kb_name": "knowledge_base_name",
         "max_questions": 5  // optional
     }
     """
@@ -73,10 +71,9 @@ async def websocket_mimic_generate(websocket: WebSocket):
         # 1. Wait for config
         data = await websocket.receive_json()
         mode = data.get("mode", "parsed")  # "upload" or "parsed"
-        kb_name = data.get("kb_name", "ai_textbook")
         max_questions = data.get("max_questions")
 
-        logger.info(f"Starting mimic generation (mode: {mode}, kb: {kb_name})")
+        logger.info(f"Starting mimic generation (mode: {mode})")
 
         # 2. Setup Log Queue
         log_queue = asyncio.Queue()
@@ -255,7 +252,6 @@ async def websocket_mimic_generate(websocket: WebSocket):
             result = await mimic_exam_questions(
                 pdf_path=pdf_path,
                 paper_dir=paper_dir,
-                kb_name=kb_name,
                 output_dir=output_dir,
                 max_questions=max_questions,
                 ws_callback=ws_callback,
@@ -338,7 +334,6 @@ async def websocket_question_generate(websocket: WebSocket):
         # 1. Wait for config
         data = await websocket.receive_json()
         requirement = data.get("requirement")
-        kb_name = data.get("kb_name", "ai_textbook")
         count = data.get("count", 1)
 
         if not requirement:
@@ -349,7 +344,7 @@ async def websocket_question_generate(websocket: WebSocket):
             return
 
         # Generate task ID
-        task_key = f"question_{kb_name}_{hash(str(requirement))}"
+        task_key = f"question_{hash(str(requirement))}"
         task_id = task_manager.generate_task_id("question_gen", task_key)
 
         # Send task ID to frontend
@@ -382,7 +377,6 @@ async def websocket_question_generate(websocket: WebSocket):
             api_key=api_key,
             base_url=base_url,
             api_version=api_version,
-            kb_name=kb_name,
             language=get_ui_language(default=config.get("system", {}).get("language", "en")),
             max_rounds=10,
             output_dir=str(output_base),
@@ -446,7 +440,6 @@ async def websocket_question_generate(websocket: WebSocket):
                             "requirement": requirement,
                             "question": result.get("question", {}),
                             "validation": result.get("validation", {}),
-                            "kb_name": kb_name,
                         },
                         summary=result.get("question", {}).get("question", "")[:100],
                     )

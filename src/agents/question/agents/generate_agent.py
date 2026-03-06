@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-GenerateAgent - Responsible for generating questions based on knowledge context.
+GenerateAgent - Responsible for generating questions based on context.
 
 Uses unified BaseAgent for LLM calls and configuration management.
 """
@@ -15,10 +15,10 @@ from src.agents.base_agent import BaseAgent
 
 class GenerateAgent(BaseAgent):
     """
-    Agent responsible for generating questions from knowledge context.
+    Agent responsible for generating questions from context.
 
     Responsibilities:
-    - Generate questions based on requirements and knowledge
+    - Generate questions based on requirements and optional context
     - Support both custom mode (from scratch) and mimic mode (from reference)
     - Output structured question JSON
     """
@@ -45,7 +45,7 @@ class GenerateAgent(BaseAgent):
     async def process(
         self,
         requirement: dict[str, Any],
-        knowledge_context: str,
+        context: str | None = None,
         focus: dict[str, Any] | None = None,
         reference_question: str | None = None,
     ) -> dict[str, Any]:
@@ -54,7 +54,7 @@ class GenerateAgent(BaseAgent):
 
         Args:
             requirement: Question requirement dict (knowledge_point, difficulty, question_type, etc.)
-            knowledge_context: Retrieved knowledge summary
+            context: Optional user-provided context/reference materials
             focus: Optional focus/angle for the question
             reference_question: Optional reference question for mimic mode
 
@@ -75,19 +75,23 @@ class GenerateAgent(BaseAgent):
         else:
             focus_str = f"Type: {requirement.get('question_type', 'written')}"
 
+        # Use context if provided
+        if context is None:
+            context = "No reference materials provided. Generate questions based on the knowledge point and your knowledge."
+
         # Choose prompt based on mode
         if reference_question:
             # Mimic mode
             return await self._generate_with_reference(
                 requirements_str=requirements_str,
-                knowledge_context=knowledge_context,
+                context=context,
                 reference_question=reference_question,
             )
         else:
             # Custom mode
             return await self._generate_custom(
                 requirements_str=requirements_str,
-                knowledge_context=knowledge_context,
+                context=context,
                 focus_str=focus_str,
                 knowledge_point=requirement.get("knowledge_point", ""),
             )
@@ -95,7 +99,7 @@ class GenerateAgent(BaseAgent):
     async def _generate_custom(
         self,
         requirements_str: str,
-        knowledge_context: str,
+        context: str,
         focus_str: str,
         knowledge_point: str,
     ) -> dict[str, Any]:
@@ -104,7 +108,7 @@ class GenerateAgent(BaseAgent):
 
         Args:
             requirements_str: JSON string of requirements
-            knowledge_context: Retrieved knowledge summary
+            context: User-provided context or default message
             focus_str: Focus/angle description
             knowledge_point: Main knowledge point
 
@@ -120,16 +124,14 @@ class GenerateAgent(BaseAgent):
                 "Generate a question based on:\n"
                 "Requirements: {requirements}\n"
                 "Focus: {focus}\n"
-                "Knowledge: {knowledge}\n\n"
+                "Context: {context}\n\n"
                 "Return JSON with question_type, question, correct_answer, explanation."
             )
 
         user_prompt = user_prompt_template.format(
             requirements=requirements_str,
             focus=focus_str,
-            knowledge=knowledge_context[:4000]
-            if len(knowledge_context) > 4000
-            else knowledge_context,
+            context=context[:4000] if len(context) > 4000 else context,
         )
 
         try:
@@ -160,7 +162,7 @@ class GenerateAgent(BaseAgent):
     async def _generate_with_reference(
         self,
         requirements_str: str,
-        knowledge_context: str,
+        context: str,
         reference_question: str,
     ) -> dict[str, Any]:
         """
@@ -168,7 +170,7 @@ class GenerateAgent(BaseAgent):
 
         Args:
             requirements_str: JSON string of requirements
-            knowledge_context: Retrieved knowledge summary
+            context: User-provided context or default message
             reference_question: Reference question text
 
         Returns:
@@ -183,16 +185,14 @@ class GenerateAgent(BaseAgent):
                 "Generate a new question inspired by the reference but distinct:\n"
                 "Reference: {reference_question}\n"
                 "Requirements: {requirements}\n"
-                "Knowledge: {knowledge}\n\n"
+                "Context: {context}\n\n"
                 "Return JSON with question_type, question, correct_answer, explanation."
             )
 
         user_prompt = user_prompt_template.format(
             reference_question=reference_question,
             requirements=requirements_str,
-            knowledge=knowledge_context[:4000]
-            if len(knowledge_context) > 4000
-            else knowledge_context,
+            context=context[:4000] if len(context) > 4000 else context,
         )
 
         try:
