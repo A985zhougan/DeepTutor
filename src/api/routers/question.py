@@ -423,11 +423,50 @@ async def websocket_question_generate(websocket: WebSocket):
                 # Use custom mode generation (new streamlined flow)
                 logger.info(f"Starting custom mode generation for {count} question(s)")
 
-                # Use the new custom generation method
-                batch_result = await coordinator.generate_questions_custom(
-                    requirement=requirement,
-                    num_questions=count,
-                )
+                # Run with timeout so frontend does not load forever if RAG/LLM hangs
+                QUESTION_GEN_TIMEOUT = 300  # 5 minutes
+                try:
+                    batch_result = await asyncio.wait_for(
+                        coordinator.generate_questions_custom(
+                            requirement=requirement,
+                            num_questions=count,
+                        ),
+                        timeout=QUESTION_GEN_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    logger.error("Question generation timed out")
+                    try:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "content": "Generation timed out. The knowledge base or LLM may be slow. Try again or use a smaller scope.",
+                            }
+                        )
+                        await websocket.send_json({"type": "complete"})
+                    except (RuntimeError, WebSocketDisconnect):
+                        pass
+                    task_manager.update_task_status(task_id, "error", error="timeout")
+                    batch_result = {"success": False}
+                    return  # Already sent error + complete; skip rest
+
+                # When generation fails (e.g. no KB), send error to frontend so loading stops
+                if not batch_result.get("success"):
+                    error_content = batch_result.get(
+                        "message",
+                        batch_result.get("error", "Unknown error"),
+                    )
+                    if batch_result.get("error") == "knowledge_not_found":
+                        error_content = (
+                            "Knowledge base does not contain relevant information. "
+                            "Please create or select a knowledge base and add documents first."
+                        )
+                    try:
+                        await websocket.send_json(
+                            {"type": "error", "content": error_content}
+                        )
+                    except (RuntimeError, WebSocketDisconnect):
+                        pass
+                    logger.warning(f"Question generation failed: {error_content}")
 
                 # Results are already sent via WebSocket callbacks in the coordinator
                 # Just need to save to history for successful results
@@ -516,6 +555,12 @@ async def websocket_question_generate(websocket: WebSocket):
             except (RuntimeError, WebSocketDisconnect):
                 logger.debug("WebSocket closed, cannot send error message")
             task_manager.update_task_status(task_id, "error", error=error_msg)
+
+            # Always send "complete" so frontend stops loading and can show error
+            try:
+                await websocket.send_json({"type": "complete"})
+            except (RuntimeError, WebSocketDisconnect):
+                pass
 
         finally:
             pusher_task.cancel()
