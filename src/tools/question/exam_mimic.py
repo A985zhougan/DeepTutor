@@ -29,6 +29,7 @@ sys.path.insert(0, str(project_root))
 # Note: AgentCoordinator is imported inside functions to avoid circular import
 from src.services.llm.config import get_llm_config
 from src.tools.question.pdf_parser import parse_pdf_with_mineru
+from src.tools.question.pdf_parser_zhipu import parse_pdf_with_zhipu
 from src.tools.question.question_extractor import extract_questions_from_paper
 
 # Type alias for WebSocket callback
@@ -201,12 +202,20 @@ async def mimic_exam_questions(
     # If a PDF is provided, parse it first
     elif pdf_path:
         # Stage 1: Parsing PDF
+        # Load config to determine which parser to use
+        from src.services.config import load_config_with_main
+        config = load_config_with_main("question_config.yaml", project_root)
+        question_cfg = config.get("question", {})
+        pdf_parser = question_cfg.get("pdf_parser", "zhipu")  # Default to zhipu
+        
+        parser_name = "Zhipu GLM-OCR" if pdf_parser == "zhipu" else "MinerU"
+        
         await send_progress(
             "progress",
-            {"stage": "parsing", "status": "running", "message": "Parsing PDF with MinerU..."},
+            {"stage": "parsing", "status": "running", "message": f"Parsing PDF with {parser_name}..."},
         )
 
-        print("🔄 Step 1: parse the PDF exam")
+        print(f"🔄 Step 1: parse the PDF exam (using {parser_name})")
         print("-" * 80)
 
         # Use provided output_dir or default to mimic_papers
@@ -216,11 +225,15 @@ async def mimic_exam_questions(
             output_base = project_root / "data" / "user" / "question" / "mimic_papers"
         output_base.mkdir(parents=True, exist_ok=True)
 
-        success = parse_pdf_with_mineru(pdf_path=pdf_path, output_base_dir=str(output_base))
+        # Choose parser based on config
+        if pdf_parser == "zhipu":
+            success = parse_pdf_with_zhipu(pdf_path=pdf_path, output_base_dir=str(output_base))
+        else:
+            success = parse_pdf_with_mineru(pdf_path=pdf_path, output_base_dir=str(output_base))
 
         if not success:
-            await send_progress("error", {"content": "Failed to parse PDF with MinerU"})
-            return {"success": False, "error": "Failed to parse PDF"}
+            await send_progress("error", {"content": f"Failed to parse PDF with {parser_name}"})
+            return {"success": False, "error": f"Failed to parse PDF with {parser_name}"}
 
         print()
 

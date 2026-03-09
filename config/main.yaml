@@ -40,8 +40,14 @@ logging:
 question:
   # Refactored: no iteration loops (max_rounds removed)
   rag_query_count: 3
-  max_parallel_questions: 1
+  max_parallel_questions: 50
   rag_mode: naive
+  # PDF parsing configuration
+  pdf_parser: zhipu  # Options: mineru, zhipu
+  zhipu_ocr:
+    model: glm-ocr
+    api_url: https://open.bigmodel.cn/api/paas/v4/layout_parsing
+    timeout: 300
   agents:
     retrieve:
       top_k: 30

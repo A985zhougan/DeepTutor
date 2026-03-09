@@ -30,6 +30,7 @@ project_root = Path(__file__).parent.parent.parent.parent
 config = load_config_with_main("question_config.yaml", project_root)
 log_dir = config.get("paths", {}).get("user_log_dir") or config.get("logging", {}).get("log_dir")
 logger = get_logger("QuestionAPI", log_dir=log_dir)
+QUESTION_CFG = config.get("question", {})
 
 router = APIRouter()
 
@@ -203,7 +204,10 @@ async def websocket_mimic_generate(websocket: WebSocket):
                     {
                         "type": "status",
                         "stage": "parsing",
-                        "content": "Parsing PDF exam paper (MinerU)...",
+                        "content": (
+                            "Parsing PDF exam paper "
+                            f"({'Zhipu GLM-OCR' if QUESTION_CFG.get('pdf_parser', 'zhipu') == 'zhipu' else 'MinerU'})..."
+                        ),
                     }
                 )
                 logger.info(f"Saved and validated uploaded PDF to: {pdf_path}")
@@ -461,9 +465,7 @@ async def websocket_question_generate(websocket: WebSocket):
                             "Please create or select a knowledge base and add documents first."
                         )
                     try:
-                        await websocket.send_json(
-                            {"type": "error", "content": error_content}
-                        )
+                        await websocket.send_json({"type": "error", "content": error_content})
                     except (RuntimeError, WebSocketDisconnect):
                         pass
                     logger.warning(f"Question generation failed: {error_content}")

@@ -231,7 +231,7 @@ async def _openai_complete(
         if "response_format" in kwargs:
             data["response_format"] = kwargs["response_format"]
 
-        timeout = aiohttp.ClientTimeout(total=120)
+        timeout = aiohttp.ClientTimeout(total=600)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, headers=headers, json=data) as resp:
                 if resp.status == 200:
@@ -401,7 +401,7 @@ async def _anthropic_complete(
         "temperature": kwargs.get("temperature", 0.7),
     }
 
-    timeout = aiohttp.ClientTimeout(total=120)
+    timeout = aiohttp.ClientTimeout(total=600)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post(url, headers=headers, json=data) as response:
             if response.status != 200:
